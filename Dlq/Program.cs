@@ -13,15 +13,28 @@ builder.Services.AddLogging(loggingBuilder => loggingBuilder.AddNLog());
 builder.Services.AddTransient<ILogger>(_ => LogManager.GetCurrentClassLogger());
 
 var app = builder.Build();
-app.AddCommand("transfer", async (string topic, string subscription, [FromService]TransferDeadLetterMessages transfer) =>
-{
-    await transfer.ProcessDeadLetterMessagesAsync(topic, subscription);
-});
 
-app.AddCommand("purge", async (string topic, string subscription, [FromService]TransferDeadLetterMessages transfer) =>
-{
-    await transfer.PurgeDeadLetterMessagesAsync(topic, subscription);
-});
+app.AddSubCommand("queue", x =>
+    {
+        x.AddCommand("transfer", async (string queue, [FromService]TransferDeadLetterMessages transfer) =>
+        {
+            await transfer.ProcessDeadLetterMessagesAsync(queue);
+        });
+    })
+    .WithDescription("Queue process");
+
+app.AddSubCommand("topic", x =>
+    {
+        x.AddCommand("transfer", async (string topic, string subscription, [FromService]TransferDeadLetterMessages transfer) =>
+        {
+            await transfer.ProcessDeadLetterMessagesAsync(topic, subscription);
+        });
+        x.AddCommand("purge", async (string topic, string subscription, [FromService]TransferDeadLetterMessages transfer) =>
+        {
+            await transfer.PurgeDeadLetterMessagesAsync(topic, subscription);
+        });
+    })
+    .WithDescription("Topic process");
 
 app.AddCommand("info", ([FromService]ILogger logger) =>
 {

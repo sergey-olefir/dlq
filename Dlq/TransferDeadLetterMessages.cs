@@ -49,9 +49,41 @@ namespace Dlq
             });
         }
 
-        public async Task ProcessDeadLetterMessagesAsync(string topicName, string subscriberName)
+        public async Task ProcessDeadLetterMessagesAsync(string queueName, string subscriberName)
         {
-            await this.ProcessTopicAsync(topicName, subscriberName, async (sender, receiver) =>
+            await this.ProcessTopicAsync(queueName, subscriberName, async (sender, receiver) =>
+            {
+                var wait = new TimeSpan(0, 0, 10);
+                var now = DateTime.UtcNow;
+
+                this._logger.Info("starting to transfer");
+                this._logger.Info($"fetching messages ({wait.TotalSeconds} seconds retrieval timeout)");
+
+                IReadOnlyList<ServiceBusReceivedMessage> dlqMessages;
+                do
+                {
+                    dlqMessages = await receiver.ReceiveMessagesAsync(this._configuration.BatchSize, wait);
+                    dlqMessages = dlqMessages.Where(x => x.EnqueuedTime < now).ToArray();
+
+                    this._logger.Info($"dl-count: {dlqMessages.Count}");
+
+                    this._logger.Info($"dl-attempting to send batch messages: {dlqMessages.Count}");
+                    var messages = dlqMessages.Select(x => new ServiceBusMessage(x)).ToArray();
+                    await sender.SendMessagesAsync(messages);
+                    this._logger.Info($"dl-messages-sent: {dlqMessages.Count}");
+
+                    await Task.WhenAll(dlqMessages.Select(x => this.CompleteMessageAsync(x, receiver)));
+
+                    this._logger.Info("--------------------------------------------------------------------------------------");
+                } while (dlqMessages.Count > 0);
+
+                this._logger.Info("finished");
+            });
+        }
+
+        public async Task ProcessDeadLetterMessagesAsync(string queueName)
+        {
+            await this.ProcessQueueAsync(queueName, async (sender, receiver) =>
             {
                 var wait = new TimeSpan(0, 0, 10);
                 var now = DateTime.UtcNow;
@@ -114,6 +146,40 @@ namespace Dlq
                 if (ex.Reason == ServiceBusFailureReason.MessagingEntityNotFound)
                 {
                     this._logger.Error(ex, $"Topic:Subscriber '{topicName}:{subscriberName}' not found. Check that the name provided is correct.");
+                }
+                else
+                {
+                    throw;
+                }
+            }
+            finally
+            {
+                await sender.CloseAsync();
+                await this._client.DisposeAsync();
+            }
+        }
+
+        private async Task ProcessQueueAsync(string queueName, Func<ServiceBusSender, ServiceBusReceiver, Task> action)
+        {
+            ServiceBusSender? sender = this._client.CreateSender(queueName);
+
+            try
+            {
+                ServiceBusReceiver? dlqReceiver = this._client.CreateReceiver(queueName, new ServiceBusReceiverOptions
+                {
+                    SubQueue = SubQueue.DeadLetter,
+                    ReceiveMode = ServiceBusReceiveMode.PeekLock
+                });
+
+                this._logger.Info($"queue: {queueName}");
+                await action(sender, dlqReceiver);
+                await dlqReceiver.CloseAsync();
+            }
+            catch (ServiceBusException ex)
+            {
+                if (ex.Reason == ServiceBusFailureReason.MessagingEntityNotFound)
+                {
+                    this._logger.Error(ex, $"Queue:Subscriber '{queueName}' not found. Check that the name provided is correct.");
                 }
                 else
                 {
