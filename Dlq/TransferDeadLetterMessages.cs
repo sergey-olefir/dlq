@@ -31,11 +31,19 @@ namespace Dlq
                 this._logger.Info("starting to purge");
                 this._logger.Info($"fetching messages ({wait.TotalSeconds} seconds retrieval timeout)");
 
-                IReadOnlyList<ServiceBusReceivedMessage> dlqMessages;
+                var dlqMessages = new List<ServiceBusReceivedMessage>(this._configuration.BatchSize);
+                int counter = 0;
                 do
                 {
-                    dlqMessages = await receiver.ReceiveMessagesAsync(this._configuration.BatchSize, wait);
-                    dlqMessages = dlqMessages.Where(x => x.EnqueuedTime < now).ToArray();
+                    dlqMessages.Clear();
+                    IReadOnlyList<ServiceBusReceivedMessage> receivedMessages;
+                    do
+                    {
+                        receivedMessages = await receiver.ReceiveMessagesAsync(this._configuration.BatchSize, wait);
+                        dlqMessages.AddRange(receivedMessages.Where(x => x.EnqueuedTime < now).Where(x => x.EnqueuedTime < new DateTime(2023, 07, 25, 09, 56, 00, DateTimeKind.Utc)).ToArray());
+                        counter += receivedMessages.Count;
+                        this._logger.Info($"progessed {counter} messages");
+                    } while (receivedMessages.Count != 0 && dlqMessages.Count < this._configuration.BatchSize);
 
                     this._logger.Info($"dl-count: {dlqMessages.Count}");
                     this._logger.Info($"dl-messages-sent: {dlqMessages.Count}");
@@ -59,11 +67,16 @@ namespace Dlq
                 this._logger.Info("starting to transfer");
                 this._logger.Info($"fetching messages ({wait.TotalSeconds} seconds retrieval timeout)");
 
-                IReadOnlyList<ServiceBusReceivedMessage> dlqMessages;
+                var dlqMessages = new List<ServiceBusReceivedMessage>(this._configuration.BatchSize);
                 do
                 {
-                    dlqMessages = await receiver.ReceiveMessagesAsync(this._configuration.BatchSize, wait);
-                    dlqMessages = dlqMessages.Where(x => x.EnqueuedTime < now).ToArray();
+                    dlqMessages.Clear();
+                    IReadOnlyList<ServiceBusReceivedMessage> receivedMessages;
+                    do
+                    {
+                        receivedMessages = await receiver.ReceiveMessagesAsync(this._configuration.BatchSize, wait);
+                        dlqMessages.AddRange(receivedMessages.Where(x => x.EnqueuedTime < now).ToArray());
+                    } while (receivedMessages.Count != 0 && dlqMessages.Count < this._configuration.BatchSize);
 
                     this._logger.Info($"dl-count: {dlqMessages.Count}");
 
